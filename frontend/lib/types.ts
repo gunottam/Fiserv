@@ -13,6 +13,7 @@ export interface PredictRequest {
   hour: number
   is_peak_hour: boolean
   historical_stockout_rate?: number | null
+  store_id?: string | null
 }
 
 export interface PredictResponse {

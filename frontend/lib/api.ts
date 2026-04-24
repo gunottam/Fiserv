@@ -57,6 +57,7 @@ export function alertToPredictRequest(alert: InventoryAlert): PredictRequest {
     day_of_week: alert.metadata.day_of_week,
     hour,
     is_peak_hour: alert.metadata.is_peak_hour,
+    store_id: alert.metadata.store_id,
   }
 }
 

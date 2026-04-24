@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
 
 from services.context_engine import adjust_velocity
 from services.explain import generate_explanation
 from services.inference import predict_velocity
 from services.restock import compute_restock
+from services.telegram import send_telegram_alert
 from utils.preprocessing import (
     historical_stockout_rate_for,
     is_weekend,
@@ -44,6 +45,10 @@ class PredictRequest(BaseModel):
     historical_stockout_rate: float | None = Field(
         default=None, ge=0.0, le=1.0, examples=[0.25]
     )
+
+    # Optional: passed through to the Telegram notification so the operator
+    # sees which physical store the alert came from. Not used by the model.
+    store_id: str | None = Field(default=None, examples=["IND-01"])
 
     @field_validator("day_of_week")
     @classmethod
@@ -88,8 +93,17 @@ class PredictResponse(BaseModel):
     response_model=PredictResponse,
     summary="Contextual restock decision for a single SKU",
 )
-async def predict(request: PredictRequest) -> PredictResponse:
-    """Pipeline: preprocess → predict → context-adjust → restock → explain."""
+async def predict(
+    request: PredictRequest,
+    background_tasks: BackgroundTasks,
+) -> PredictResponse:
+    """Pipeline: preprocess → predict → context-adjust → restock → explain.
+
+    After the response is built, a Telegram notification is scheduled via
+    ``BackgroundTasks`` so the API never waits on (or fails because of) the
+    external bot. The notification service itself silently no-ops for LOW
+    urgency or when Telegram env vars are missing.
+    """
     try:
         # 1) Normalize the raw payload into model-ready features.
         features = prepare_features(
@@ -146,7 +160,7 @@ async def predict(request: PredictRequest) -> PredictResponse:
         }
         explanation = await generate_explanation(explanation_params)
 
-        return PredictResponse(
+        response = PredictResponse(
             urgency=restock.urgency,
             restock=restock.restock_units,
             predicted_velocity=round(predicted, 2),
@@ -164,6 +178,32 @@ async def predict(request: PredictRequest) -> PredictResponse:
             is_peak_hour=features["is_peak_hour"],
             historical_stockout_rate=round(float(stockout_rate), 4),
         )
+
+        # 6) Fire-and-forget Telegram notification (HIGH/MEDIUM only).
+        # Scheduled as a background task so the HTTP response returns before
+        # we touch the Telegram API — a slow or failing bot can never block
+        # or error the client.
+        background_tasks.add_task(
+            send_telegram_alert,
+            {
+                "urgency": response.urgency,
+                "item_id": response.item_id,
+                "item_name": response.item_name,
+                "store_id": request.store_id,
+                "current_stock": response.current_stock,
+                "threshold": response.threshold,
+                "adjusted_velocity": response.adjusted_velocity,
+                "coverage_hours": response.coverage_hours,
+                "restock": response.restock,
+                "explanation": response.explanation,
+                "context_factors": response.context_factors,
+                "day_of_week": response.day_of_week,
+                "hour": response.hour,
+                "is_peak_hour": response.is_peak_hour,
+            },
+        )
+
+        return response
 
     except HTTPException:
         raise

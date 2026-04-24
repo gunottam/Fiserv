@@ -23,7 +23,8 @@ backend/
 │   ├── context_engine.py       # applies +20% boosts (peak / weekend / history)
 │   ├── restock.py              # restock qty, urgency, coverage, stockout risk
 │   ├── explain.py              # one-shot Groq explanation + rule fallback
-│   └── chat.py                 # multi-turn Groq chat + rule fallback
+│   ├── chat.py                 # multi-turn Groq chat + rule fallback
+│   └── telegram.py             # HIGH/MEDIUM alert notifications (optional)
 ├── utils/
 │   └── preprocessing.py        # day-of-week + item_id encoding, feature prep
 ├── scripts/
@@ -86,10 +87,43 @@ cp .env.example .env
 uvicorn app:app --reload --port 8000
 ```
 
-The `/` health endpoint reports `model_loaded`, `item_stats_loaded`, and
-`groq_configured` so you can verify everything wired up. A fresh install
-without training still works — inference.py falls back to a per-item
-heuristic and `historical_stockout_rate` defaults to 0.
+The `/` health endpoint reports `model_loaded`, `item_stats_loaded`,
+`groq_configured`, and `telegram_configured` so you can verify everything
+wired up. A fresh install without training still works — inference.py falls
+back to a per-item heuristic and `historical_stockout_rate` defaults to 0.
+
+## Telegram notifications (optional)
+
+When `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are set in `.env`, every
+`HIGH` or `MEDIUM` `/predict` response triggers a short Markdown alert to
+Telegram. `LOW` urgency is a silent no-op. The call runs via FastAPI's
+`BackgroundTasks` so it fires *after* the HTTP response — a slow or failing
+bot can never block or error the client. Missing env vars, timeouts, and
+non-2xx responses are logged and swallowed.
+
+Setup:
+
+1. Create a bot with [@BotFather](https://t.me/BotFather) to get the token.
+2. Start a chat with your bot (or add it to a group), then visit
+   `https://api.telegram.org/bot<TOKEN>/getUpdates` to find your `chat.id`.
+3. Set both values in `backend/.env`. Leave either blank to disable.
+
+Sample message:
+
+```
+🚨 *HIGH URGENCY ALERT*
+
+📦 Item: Croissants
+📍 Store: IND-01
+📊 Stock: 7 units
+
+⚡ Demand: 22.0 units/hr
+📉 Coverage: 0.8 hours
+
+📦 *Restock Now: +30 units*
+
+🧠 _Saturday morning peak with rising demand and past stockouts_
+```
 
 Health check: <http://localhost:8000/> · Docs: <http://localhost:8000/docs>
 

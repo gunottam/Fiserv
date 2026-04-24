@@ -5,6 +5,11 @@ groq>=0.12.0
 joblib>=1.4.0
 numpy>=1.26.0
 pydantic>=2.9.0
+requests>=2.31.0
+
+# Telegram: `requests` handles fire-and-forget alert push; python-telegram-bot
+# runs the async long-polling listener for /help /status /alerts /mute etc.
+python-telegram-bot>=21.0,<22.0
 
 # ML runtime + training
 # scikit-learn is required at runtime to unpickle the trained model. pandas
