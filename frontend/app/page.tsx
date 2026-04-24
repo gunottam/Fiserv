@@ -3,18 +3,20 @@
 import * as React from "react"
 import {
   ActivityIcon,
+  AlertCircleIcon,
   ArrowUpRightIcon,
   BoxesIcon,
   CalendarClockIcon,
   CheckIcon,
-  CloudSunIcon,
   ClockIcon,
   HistoryIcon,
   MoonIcon,
+  RefreshCwIcon,
   SparklesIcon,
   SunIcon,
   TrendingUpIcon,
   TriangleAlertIcon,
+  ZapIcon,
 } from "lucide-react"
 import { useTheme } from "next-themes"
 import {
@@ -28,6 +30,8 @@ import {
 } from "recharts"
 import { toast } from "sonner"
 
+import { ChatDrawer } from "@/components/chat-drawer"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -48,94 +52,60 @@ import {
   ProgressIndicator,
   ProgressTrack,
 } from "@/components/ui/progress"
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Separator } from "@/components/ui/separator"
+import { Skeleton } from "@/components/ui/skeleton"
+import {
+  alertToPredictRequest,
+  api,
+} from "@/lib/api"
+import { SAMPLE_ALERTS, alertLabel } from "@/lib/sample-alerts"
+import type {
+  DemandSeriesResponse,
+  InventoryAlert,
+  PredictResponse,
+  Urgency,
+} from "@/lib/types"
 import { cn } from "@/lib/utils"
 
-const ITEM = {
-  name: "Croissants",
-  sku: "BKR-CRS-002",
-  location: "Store #42 · Bakery Counter",
-  stock: 18,
-  threshold: 40,
-  predictedDemand: 18,
-  adjustedDemand: 22,
-  coverageHours: 0.8,
-  stockoutRisk: 42,
-  restockUnits: 30,
-  urgency: "high" as const,
-}
-
-const DEMAND_SERIES: Array<{ hour: string; index: number; demand: number }> = [
-  { hour: "6a", index: 6, demand: 4 },
-  { hour: "7a", index: 7, demand: 10 },
-  { hour: "8a", index: 8, demand: 16 },
-  { hour: "9a", index: 9, demand: 22 },
-  { hour: "10a", index: 10, demand: 19 },
-  { hour: "11a", index: 11, demand: 14 },
-  { hour: "12p", index: 12, demand: 18 },
-  { hour: "1p", index: 13, demand: 15 },
-  { hour: "2p", index: 14, demand: 10 },
-  { hour: "3p", index: 15, demand: 8 },
-  { hour: "4p", index: 16, demand: 11 },
-  { hour: "5p", index: 17, demand: 13 },
-  { hour: "6p", index: 18, demand: 10 },
-  { hour: "7p", index: 19, demand: 6 },
-  { hour: "8p", index: 20, demand: 4 },
-  { hour: "9p", index: 21, demand: 2 },
-]
-const CURRENT_HOUR_INDEX = 9
-const BASELINE_DEMAND = 18
-
-const CHART_CONFIG = {
-  demand: {
-    label: "Demand",
-    color: "var(--destructive)",
-  },
-} satisfies ChartConfig
-
-const REASONING_FACTORS = [
+const URGENCY_CONFIG: Record<
+  Urgency,
   {
-    icon: CalendarClockIcon,
-    title: "Saturday peak",
-    detail: "+22% vs weekday avg",
-  },
-  {
-    icon: HistoryIcon,
-    title: "2 recent stockouts",
-    detail: "Past 3 Saturdays, 9–10am",
-  },
-  {
-    icon: TrendingUpIcon,
-    title: "Trend rising",
-    detail: "+18% hourly velocity",
-  },
-  {
-    icon: CloudSunIcon,
-    title: "Clear weather",
-    detail: "Expected foot traffic +12%",
-  },
-]
-
-const URGENCY_CONFIG = {
-  high: {
+    label: string
+    badgeVariant: "destructive" | "warning" | "success"
+    ringClass: string
+    tintClass: string
+    accentText: string
+    accentBg: string
+  }
+> = {
+  HIGH: {
     label: "High urgency",
-    badgeVariant: "destructive" as const,
+    badgeVariant: "destructive",
     ringClass: "ring-destructive/40",
     tintClass: "bg-destructive/5",
     accentText: "text-destructive",
     accentBg: "bg-destructive",
   },
-  medium: {
+  MEDIUM: {
     label: "Medium urgency",
-    badgeVariant: "warning" as const,
+    badgeVariant: "warning",
     ringClass: "ring-warning/40",
     tintClass: "bg-warning/5",
     accentText: "text-warning",
     accentBg: "bg-warning",
   },
-  low: {
+  LOW: {
     label: "Low urgency",
-    badgeVariant: "success" as const,
+    badgeVariant: "success",
     ringClass: "ring-success/40",
     tintClass: "bg-success/5",
     accentText: "text-success",
@@ -143,58 +113,213 @@ const URGENCY_CONFIG = {
   },
 }
 
+const CHART_CONFIG = {
+  demand: { label: "Demand", color: "var(--destructive)" },
+} satisfies ChartConfig
+
+// Map a context-factor string from the backend to a presentable card.
+const FACTOR_META: Record<
+  string,
+  { icon: React.ComponentType<{ className?: string }>; detail: string }
+> = {
+  "Peak hour": {
+    icon: ZapIcon,
+    detail: "+20% velocity boost applied",
+  },
+  Weekend: {
+    icon: CalendarClockIcon,
+    detail: "+20% velocity boost applied",
+  },
+  "Historical stockouts": {
+    icon: HistoryIcon,
+    detail: "+20% boost — elevated stockout rate for this SKU",
+  },
+}
+
 export default function DashboardPage() {
-  const urgency = URGENCY_CONFIG[ITEM.urgency]
-  const stockPct = Math.min(100, (ITEM.stock / ITEM.threshold) * 100)
+  const [alertId, setAlertId] = React.useState<string>(SAMPLE_ALERTS[0].alert_id)
+  const alert = React.useMemo<InventoryAlert>(
+    () =>
+      SAMPLE_ALERTS.find((a) => a.alert_id === alertId) ?? SAMPLE_ALERTS[0],
+    [alertId]
+  )
+
+  const [decision, setDecision] = React.useState<PredictResponse | null>(null)
+  const [series, setSeries] = React.useState<DemandSeriesResponse | null>(null)
+  const [loading, setLoading] = React.useState(true)
+  const [error, setError] = React.useState<string | null>(null)
+
+  const fetchData = React.useCallback(async (current: InventoryAlert) => {
+    setLoading(true)
+    setError(null)
+    try {
+      const payload = alertToPredictRequest(current)
+      const [pred, dem] = await Promise.all([
+        api.predict(payload),
+        api.demandSeries(current.item_id, current.metadata.day_of_week),
+      ])
+      setDecision(pred)
+      setSeries(dem)
+    } catch (err) {
+      setDecision(null)
+      setSeries(null)
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Could not reach the backend at " +
+            (process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000")
+      )
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  React.useEffect(() => {
+    void fetchData(alert)
+  }, [alert, fetchData])
 
   function handleApproveRestock() {
+    if (!decision) return
     toast.success("Restock order placed", {
-      description: `+${ITEM.restockUnits} units of ${ITEM.name} dispatched to ${ITEM.location}.`,
+      description: `+${decision.restock} units of ${decision.item_name} dispatched to ${alert.metadata.store_id}.`,
       icon: <CheckIcon />,
     })
   }
 
+  const urgency = decision ? URGENCY_CONFIG[decision.urgency] : URGENCY_CONFIG.LOW
+  const stockPct = decision
+    ? Math.min(100, (decision.current_stock / decision.threshold) * 100)
+    : 0
+
   return (
     <div className="min-h-svh bg-background">
-      <SiteHeader />
+      <SiteHeader
+        alert={alert}
+        alertId={alertId}
+        onAlertChange={setAlertId}
+        onRefresh={() => void fetchData(alert)}
+        refreshing={loading}
+      />
       <main className="mx-auto flex max-w-7xl flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
-        <AlertPanel
-          urgency={urgency}
-          stockPct={stockPct}
-          onApprove={handleApproveRestock}
-        />
-        <ContextPanel />
-        <div className="grid gap-6 lg:grid-cols-5">
-          <ReasoningPanel className="lg:col-span-3" />
-          <DemandChartCard className="lg:col-span-2" />
-        </div>
+        {error && (
+          <Alert variant="destructive">
+            <AlertCircleIcon />
+            <AlertTitle>Backend unreachable</AlertTitle>
+            <AlertDescription>
+              {error} · Start the FastAPI server:{" "}
+              <code className="rounded bg-destructive/10 px-1 py-0.5 text-xs">
+                cd backend && uvicorn app:app --reload --port 8000
+              </code>
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {loading && !decision ? (
+          <DashboardSkeleton />
+        ) : decision ? (
+          <>
+            <AlertPanel
+              alert={alert}
+              decision={decision}
+              urgency={urgency}
+              stockPct={stockPct}
+              onApprove={handleApproveRestock}
+            />
+            <ContextPanel decision={decision} />
+            <div className="grid gap-6 lg:grid-cols-5">
+              <ReasoningPanel
+                decision={decision}
+                className="lg:col-span-3"
+              />
+              <DemandChartCard
+                decision={decision}
+                series={series}
+                className="lg:col-span-2"
+              />
+            </div>
+          </>
+        ) : null}
       </main>
+
+      <ChatDrawer decision={decision} disabled={loading} />
     </div>
   )
 }
 
-function SiteHeader() {
+// ---------------------------------------------------------------------------
+// Header
+// ---------------------------------------------------------------------------
+
+function SiteHeader({
+  alert,
+  alertId,
+  onAlertChange,
+  onRefresh,
+  refreshing,
+}: {
+  alert: InventoryAlert
+  alertId: string
+  onAlertChange: (id: string) => void
+  onRefresh: () => void
+  refreshing: boolean
+}) {
+  const time = new Date(alert.event_timestamp).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  })
+
   return (
-    <header className="sticky top-0 z-10 border-b border-border/60 bg-background/80 backdrop-blur-md">
+    <header className="sticky top-0 z-20 border-b border-border/60 bg-background/80 backdrop-blur-md">
       <div className="mx-auto flex h-14 max-w-7xl items-center gap-4 px-4 sm:px-6 lg:px-8">
         <div className="flex items-center gap-2.5">
           <div className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
             <BoxesIcon className="size-4" />
           </div>
-          <div className="flex flex-col leading-tight">
+          <div className="hidden flex-col leading-tight sm:flex">
             <span className="text-sm font-semibold tracking-tight">
               Contextual Inventory Intelligence
             </span>
             <span className="text-xs text-muted-foreground">
-              {ITEM.location}
+              Store {alert.metadata.store_id} · Bakery Counter
             </span>
           </div>
         </div>
-        <div className="ml-auto flex items-center gap-3">
+
+        <div className="ml-auto flex items-center gap-2 sm:gap-3">
+          <Select
+            value={alertId}
+            onValueChange={(v) => v && onAlertChange(v)}
+          >
+            <SelectTrigger size="sm" className="w-[240px]">
+              <SelectValue placeholder="Select an alert" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectLabel>Live alerts</SelectLabel>
+                {SAMPLE_ALERTS.map((a) => (
+                  <SelectItem key={a.alert_id} value={a.alert_id}>
+                    {alertLabel(a)}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+
+          <Button
+            variant="outline"
+            size="icon-sm"
+            onClick={onRefresh}
+            disabled={refreshing}
+            aria-label="Refresh decision"
+          >
+            <RefreshCwIcon className={cn(refreshing && "animate-spin")} />
+          </Button>
+
           <div className="hidden items-center gap-2 text-xs text-muted-foreground md:flex">
             <span className="inline-flex size-1.5 animate-pulse rounded-full bg-success" />
-            Live · Saturday · 09:15 AM
+            Live · {alert.metadata.day_of_week} · {time}
           </div>
+
           <ThemeToggle />
         </div>
       </div>
@@ -224,13 +349,21 @@ function ThemeToggle() {
   )
 }
 
-type UrgencyConfig = (typeof URGENCY_CONFIG)[keyof typeof URGENCY_CONFIG]
+// ---------------------------------------------------------------------------
+// Alert panel — the big call-to-action
+// ---------------------------------------------------------------------------
+
+type UrgencyConfig = (typeof URGENCY_CONFIG)[Urgency]
 
 function AlertPanel({
+  alert,
+  decision,
   urgency,
   stockPct,
   onApprove,
 }: {
+  alert: InventoryAlert
+  decision: PredictResponse
   urgency: UrgencyConfig
   stockPct: number
   onApprove: () => void
@@ -259,16 +392,21 @@ function AlertPanel({
               {urgency.label}
             </Badge>
             <Badge variant="outline" className="font-mono text-[11px]">
-              {ITEM.sku}
+              {alert.alert_id}
+            </Badge>
+            <Badge variant="outline" className="font-mono text-[11px]">
+              {decision.item_id}
             </Badge>
           </div>
 
           <div className="flex flex-col gap-1">
             <h2 className="text-3xl font-semibold tracking-tight md:text-4xl">
-              {ITEM.name}
+              {decision.item_name}
             </h2>
             <p className="text-sm text-muted-foreground">
-              Falling below reorder threshold · action required
+              {decision.current_stock <= decision.threshold
+                ? "Below reorder threshold · action required"
+                : "Above threshold · monitoring"}
             </p>
           </div>
 
@@ -281,10 +419,10 @@ function AlertPanel({
                     urgency.accentText
                   )}
                 >
-                  {ITEM.stock}
+                  {decision.current_stock}
                 </span>
                 <span className="text-sm text-muted-foreground">
-                  of {ITEM.threshold} threshold
+                  of {decision.threshold} threshold
                 </span>
               </div>
               <span
@@ -293,7 +431,9 @@ function AlertPanel({
                   urgency.accentText
                 )}
               >
-                {ITEM.threshold - ITEM.stock} below target
+                {decision.threshold - decision.current_stock > 0
+                  ? `${decision.threshold - decision.current_stock} below target`
+                  : "on target"}
               </span>
             </div>
             <Progress value={stockPct} className="flex-col gap-0">
@@ -318,19 +458,24 @@ function AlertPanel({
                   urgency.accentText
                 )}
               >
-                +{ITEM.restockUnits}
+                +{decision.restock}
               </span>
               <span className="text-sm font-medium text-muted-foreground">
                 units
               </span>
             </div>
             <span className="text-lg font-semibold tracking-tight lg:text-right">
-              Restock now
+              {decision.restock > 0 ? "Restock now" : "Hold · no action"}
             </span>
           </div>
-          <Button size="lg" className="w-full" onClick={onApprove}>
+          <Button
+            size="lg"
+            className="w-full"
+            onClick={onApprove}
+            disabled={decision.restock === 0}
+          >
             <CheckIcon data-icon="inline-start" />
-            Approve Restock
+            {decision.restock > 0 ? "Approve Restock" : "Nothing to approve"}
           </Button>
         </div>
       </CardContent>
@@ -338,7 +483,15 @@ function AlertPanel({
   )
 }
 
-function ContextPanel() {
+// ---------------------------------------------------------------------------
+// Context metrics
+// ---------------------------------------------------------------------------
+
+function ContextPanel({ decision }: { decision: PredictResponse }) {
+  const boostDelta = +(
+    decision.adjusted_velocity - decision.predicted_velocity
+  ).toFixed(1)
+
   return (
     <section
       aria-label="Context metrics"
@@ -346,35 +499,45 @@ function ContextPanel() {
     >
       <MetricCard
         icon={TrendingUpIcon}
-        label="Predicted demand"
-        value="18"
+        label="Predicted velocity"
+        value={decision.predicted_velocity.toFixed(1)}
         unit="units/hr"
-        caption="Baseline forecast"
+        caption="Model baseline for this hour"
       />
       <MetricCard
         icon={ActivityIcon}
-        label="Adjusted demand"
-        value="22"
+        label="Adjusted velocity"
+        value={decision.adjusted_velocity.toFixed(1)}
         unit="units/hr"
-        caption="After context boost"
-        delta={{ text: "+4 from context", variant: "warning" }}
+        caption={
+          decision.context_factors.length > 0
+            ? `${decision.context_factors.length} boost${
+                decision.context_factors.length > 1 ? "s" : ""
+              } applied`
+            : "No context boosts"
+        }
+        delta={
+          boostDelta > 0
+            ? { text: `+${boostDelta} from context`, variant: "warning" }
+            : undefined
+        }
       />
       <MetricCard
         icon={ClockIcon}
         label="Stock coverage"
-        value="0.8"
-        unit="hours left"
-        caption="At current sell-through"
-        tone="destructive"
+        value={decision.coverage_hours.toFixed(1)}
+        unit={decision.coverage_hours === 1 ? "hour left" : "hours left"}
+        caption="At adjusted sell-through"
+        tone={decision.coverage_hours < 1 ? "destructive" : "default"}
       />
       <MetricCard
         icon={TriangleAlertIcon}
         label="Stockout risk"
-        value="42"
+        value={decision.stockout_risk.toFixed(0)}
         unit="%"
         caption="Within the next hour"
-        tone="destructive"
-        progress={42}
+        tone={decision.stockout_risk >= 50 ? "destructive" : "default"}
+        progress={decision.stockout_risk}
       />
     </section>
   )
@@ -399,7 +562,8 @@ function MetricCard({
   tone?: "default" | "destructive"
   progress?: number
 }) {
-  const toneText = tone === "destructive" ? "text-destructive" : "text-foreground"
+  const toneText =
+    tone === "destructive" ? "text-destructive" : "text-foreground"
 
   return (
     <Card className="h-full">
@@ -445,7 +609,17 @@ function MetricCard({
   )
 }
 
-function ReasoningPanel({ className }: { className?: string }) {
+// ---------------------------------------------------------------------------
+// Reasoning panel — LLM explanation + driving signals
+// ---------------------------------------------------------------------------
+
+function ReasoningPanel({
+  decision,
+  className,
+}: {
+  decision: PredictResponse
+  className?: string
+}) {
   return (
     <Card
       className={cn(
@@ -459,9 +633,9 @@ function ReasoningPanel({ className }: { className?: string }) {
             <SparklesIcon className="size-4" />
           </div>
           <div className="flex flex-col">
-            <CardTitle className="text-base">AI Recommendation</CardTitle>
+            <CardTitle className="text-base">AI recommendation</CardTitle>
             <CardDescription className="text-xs">
-              Reasoned from real-time signals · Groq
+              Grounded on model output + context rules
             </CardDescription>
           </div>
           <Badge variant="outline" className="ml-auto gap-1">
@@ -471,18 +645,8 @@ function ReasoningPanel({ className }: { className?: string }) {
         </div>
       </CardHeader>
       <CardContent className="flex flex-col gap-5">
-        <p className="text-base leading-relaxed text-foreground md:text-[15px] md:leading-7">
-          <span className="font-semibold text-destructive">
-            High urgency.
-          </span>{" "}
-          Saturday morning peak is driving demand to{" "}
-          <span className="font-semibold tabular-nums">22 units/hr</span>, with
-          an increasing trend and two stock-outs in the past three Saturdays.
-          Add{" "}
-          <span className="font-semibold tabular-nums text-foreground">
-            30 units now
-          </span>{" "}
-          to hold coverage through the 9–11am rush and prevent lost sales.
+        <p className="text-[15px] leading-7 text-foreground">
+          {decision.explanation}
         </p>
 
         <div>
@@ -490,146 +654,239 @@ function ReasoningPanel({ className }: { className?: string }) {
             Signals driving this
           </span>
           <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-            {REASONING_FACTORS.map((factor) => (
-              <div
-                key={factor.title}
-                className="flex items-start gap-3 rounded-lg border border-border/60 bg-background/40 p-3"
-              >
-                <div className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
-                  <factor.icon className="size-3.5" />
-                </div>
-                <div className="flex min-w-0 flex-col">
-                  <span className="truncate text-sm font-medium">
-                    {factor.title}
-                  </span>
-                  <span className="truncate text-xs text-muted-foreground">
-                    {factor.detail}
-                  </span>
-                </div>
+            {decision.context_factors.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-border/60 bg-background/40 p-3 text-xs text-muted-foreground">
+                No context boosts fired — baseline velocity only.
               </div>
-            ))}
+            ) : (
+              decision.context_factors.map((factor) => {
+                const meta = FACTOR_META[factor] ?? {
+                  icon: SparklesIcon,
+                  detail: "Context boost applied",
+                }
+                const Icon = meta.icon
+                return (
+                  <div
+                    key={factor}
+                    className="flex items-start gap-3 rounded-lg border border-border/60 bg-background/40 p-3"
+                  >
+                    <div className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
+                      <Icon className="size-3.5" />
+                    </div>
+                    <div className="flex min-w-0 flex-col">
+                      <span className="truncate text-sm font-medium">
+                        {factor}
+                      </span>
+                      <span className="truncate text-xs text-muted-foreground">
+                        {meta.detail}
+                      </span>
+                    </div>
+                  </div>
+                )
+              })
+            )}
           </div>
+        </div>
+
+        <div className="flex flex-wrap gap-2 text-[11px] text-muted-foreground">
+          <span className="rounded-md border border-border/60 bg-background/40 px-2 py-1">
+            Historical stockout rate:{" "}
+            <span className="font-medium tabular-nums text-foreground">
+              {(decision.historical_stockout_rate * 100).toFixed(1)}%
+            </span>
+          </span>
+          <span className="rounded-md border border-border/60 bg-background/40 px-2 py-1">
+            Coverage rule:{" "}
+            <span className="font-medium text-foreground">
+              {decision.is_peak_hour ? "5h peak" : "3h off-peak"}
+            </span>
+          </span>
         </div>
       </CardContent>
     </Card>
   )
 }
 
-function DemandChartCard({ className }: { className?: string }) {
-  const currentPoint = DEMAND_SERIES.find(
-    (p) => p.index === CURRENT_HOUR_INDEX
-  )!
+// ---------------------------------------------------------------------------
+// Demand chart — real historical hourly mean from the CSV
+// ---------------------------------------------------------------------------
+
+function DemandChartCard({
+  decision,
+  series,
+  className,
+}: {
+  decision: PredictResponse
+  series: DemandSeriesResponse | null
+  className?: string
+}) {
+  const hasSeries = (series?.series?.length ?? 0) > 0
+
+  const chartData = (series?.series ?? []).map((p) => ({
+    hour: formatHour(p.hour),
+    index: p.hour,
+    demand: p.demand,
+  }))
+  const currentPoint = chartData.find((p) => p.index === decision.hour)
+  const baseline = series?.baseline ?? 0
 
   return (
     <Card className={cn("h-full", className)}>
       <CardHeader className="gap-1">
         <div className="flex items-center justify-between gap-2">
-          <CardTitle className="text-base">Demand · last 16 hours</CardTitle>
-          <Badge variant="destructive" className="gap-1">
-            <ArrowUpRightIcon data-icon="inline-start" />
-            Spike now
-          </Badge>
+          <CardTitle className="text-base">
+            Demand · typical {decision.day_of_week}
+          </CardTitle>
+          {currentPoint && currentPoint.demand > baseline ? (
+            <Badge variant="destructive" className="gap-1">
+              <ArrowUpRightIcon data-icon="inline-start" />
+              Above baseline
+            </Badge>
+          ) : (
+            <Badge variant="outline" className="gap-1">
+              At baseline
+            </Badge>
+          )}
         </div>
         <CardDescription className="text-xs">
-          Units/hr velocity · current hour highlighted
+          Historical mean units/hr · current hour highlighted
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <ChartContainer
-          config={CHART_CONFIG}
-          className="h-[220px] w-full"
-        >
-          <AreaChart
-            data={DEMAND_SERIES}
-            margin={{ left: -24, right: 8, top: 8, bottom: 0 }}
-          >
-            <defs>
-              <linearGradient id="demand-fill" x1="0" y1="0" x2="0" y2="1">
-                <stop
-                  offset="0%"
-                  stopColor="var(--color-demand)"
-                  stopOpacity={0.35}
+        {hasSeries ? (
+          <ChartContainer config={CHART_CONFIG} className="h-[220px] w-full">
+            <AreaChart
+              data={chartData}
+              margin={{ left: -24, right: 8, top: 8, bottom: 0 }}
+            >
+              <defs>
+                <linearGradient id="demand-fill" x1="0" y1="0" x2="0" y2="1">
+                  <stop
+                    offset="0%"
+                    stopColor="var(--color-demand)"
+                    stopOpacity={0.35}
+                  />
+                  <stop
+                    offset="100%"
+                    stopColor="var(--color-demand)"
+                    stopOpacity={0}
+                  />
+                </linearGradient>
+              </defs>
+              <CartesianGrid
+                vertical={false}
+                strokeDasharray="3 3"
+                stroke="var(--border)"
+              />
+              <XAxis
+                dataKey="hour"
+                tickLine={false}
+                axisLine={false}
+                tickMargin={8}
+                minTickGap={16}
+                className="text-xs"
+              />
+              <YAxis
+                tickLine={false}
+                axisLine={false}
+                width={32}
+                className="text-xs"
+              />
+              <ChartTooltip
+                cursor={{
+                  stroke: "var(--muted-foreground)",
+                  strokeDasharray: 3,
+                }}
+                content={
+                  <ChartTooltipContent
+                    indicator="line"
+                    labelFormatter={(v) => `Hour ${v}`}
+                  />
+                }
+              />
+              {baseline > 0 && (
+                <ReferenceLine
+                  y={baseline}
+                  stroke="var(--muted-foreground)"
+                  strokeDasharray="4 4"
+                  strokeOpacity={0.6}
+                  label={{
+                    value: "Baseline",
+                    position: "insideTopRight",
+                    fill: "var(--muted-foreground)",
+                    fontSize: 10,
+                  }}
                 />
-                <stop
-                  offset="100%"
-                  stopColor="var(--color-demand)"
-                  stopOpacity={0}
+              )}
+              <Area
+                dataKey="demand"
+                type="monotone"
+                stroke="var(--color-demand)"
+                strokeWidth={2.5}
+                fill="url(#demand-fill)"
+                activeDot={{
+                  r: 5,
+                  stroke: "var(--background)",
+                  strokeWidth: 2,
+                }}
+              />
+              {currentPoint && (
+                <ReferenceDot
+                  x={currentPoint.hour}
+                  y={currentPoint.demand}
+                  r={6}
+                  fill="var(--destructive)"
+                  stroke="var(--background)"
+                  strokeWidth={2}
                 />
-              </linearGradient>
-            </defs>
-            <CartesianGrid
-              vertical={false}
-              strokeDasharray="3 3"
-              stroke="var(--border)"
-            />
-            <XAxis
-              dataKey="hour"
-              tickLine={false}
-              axisLine={false}
-              tickMargin={8}
-              minTickGap={16}
-              className="text-xs"
-            />
-            <YAxis
-              tickLine={false}
-              axisLine={false}
-              width={32}
-              className="text-xs"
-            />
-            <ChartTooltip
-              cursor={{ stroke: "var(--muted-foreground)", strokeDasharray: 3 }}
-              content={
-                <ChartTooltipContent
-                  indicator="line"
-                  labelFormatter={(v) => `Hour ${v}`}
-                />
-              }
-            />
-            <ReferenceLine
-              y={BASELINE_DEMAND}
-              stroke="var(--muted-foreground)"
-              strokeDasharray="4 4"
-              strokeOpacity={0.6}
-              label={{
-                value: "Baseline",
-                position: "insideTopRight",
-                fill: "var(--muted-foreground)",
-                fontSize: 10,
-              }}
-            />
-            <Area
-              dataKey="demand"
-              type="monotone"
-              stroke="var(--color-demand)"
-              strokeWidth={2.5}
-              fill="url(#demand-fill)"
-              activeDot={{
-                r: 5,
-                stroke: "var(--background)",
-                strokeWidth: 2,
-              }}
-            />
-            <ReferenceDot
-              x={currentPoint.hour}
-              y={currentPoint.demand}
-              r={6}
-              fill="var(--destructive)"
-              stroke="var(--background)"
-              strokeWidth={2}
-            />
-          </AreaChart>
-        </ChartContainer>
+              )}
+            </AreaChart>
+          </ChartContainer>
+        ) : (
+          <div className="flex h-[220px] items-center justify-center text-sm text-muted-foreground">
+            No historical rows for this combination.
+          </div>
+        )}
 
         <div className="mt-4 flex items-center justify-between text-xs">
           <div className="flex items-center gap-2 text-muted-foreground">
             <span className="size-2 rounded-full bg-destructive" />
-            Now · {currentPoint.demand} units/hr
+            Now · {currentPoint ? currentPoint.demand.toFixed(1) : "—"} units/hr
           </div>
           <span className="font-medium text-muted-foreground">
-            Baseline {BASELINE_DEMAND} units/hr
+            Baseline{" "}
+            {baseline > 0 ? `${baseline.toFixed(1)} units/hr` : "n/a"}
           </span>
         </div>
       </CardContent>
     </Card>
+  )
+}
+
+function formatHour(h: number): string {
+  if (h === 0) return "12a"
+  if (h < 12) return `${h}a`
+  if (h === 12) return "12p"
+  return `${h - 12}p`
+}
+
+// ---------------------------------------------------------------------------
+// Skeleton (first-paint)
+// ---------------------------------------------------------------------------
+
+function DashboardSkeleton() {
+  return (
+    <div className="flex flex-col gap-6">
+      <Skeleton className="h-[220px] w-full rounded-xl" />
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <Skeleton key={i} className="h-[140px] w-full rounded-xl" />
+        ))}
+      </div>
+      <div className="grid gap-6 lg:grid-cols-5">
+        <Skeleton className="h-[320px] w-full rounded-xl lg:col-span-3" />
+        <Skeleton className="h-[320px] w-full rounded-xl lg:col-span-2" />
+      </div>
+    </div>
   )
 }

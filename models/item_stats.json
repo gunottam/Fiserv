@@ -1,48 +1,94 @@
 {
-  "trained_at": "2026-04-24T08:14:26+00:00",
-  "dataset": "../dataset/dataset.csv",
-  "n_rows": 2200,
+  "trained_at": "2026-04-24T08:45:56+00:00",
+  "dataset": "../dataset/bakery_inventory.csv",
+  "n_rows": 75600,
   "feature_order": [
     "day_idx",
     "hour",
     "is_peak_hour",
+    "is_weekend",
     "current_stock",
     "threshold",
     "item_idx"
   ],
-  "metrics": {
-    "test_mae": 1.503,
-    "test_r2": 0.9048,
-    "baseline_mean_mae": 5.036
+  "winner": {
+    "name": "gradient_boost",
+    "test_mae": 1.2498,
+    "test_rmse": 1.6395,
+    "test_r2": 0.9487,
+    "baseline_mean_mae": 5.68,
+    "fit_seconds": 7.38
   },
   "items": {
     "BK-01": {
       "name": "Croissants",
       "index": 0,
-      "stockout_rate": 0.1236,
-      "mean_velocity": 6.887,
-      "n_rows": 550
+      "stockout_rate": 0.0442,
+      "mean_velocity": 9.165,
+      "n_rows": 7560
     },
     "BK-02": {
-      "name": "Bread",
+      "name": "Bagels",
       "index": 1,
-      "stockout_rate": 0.1309,
-      "mean_velocity": 8.158,
-      "n_rows": 550
+      "stockout_rate": 0.0504,
+      "mean_velocity": 14.053,
+      "n_rows": 7560
     },
     "BK-03": {
-      "name": "Muffins",
+      "name": "Sourdough Loaf",
       "index": 2,
-      "stockout_rate": 0.2,
-      "mean_velocity": 8.473,
-      "n_rows": 550
+      "stockout_rate": 0.1466,
+      "mean_velocity": 4.383,
+      "n_rows": 7560
     },
     "BK-04": {
-      "name": "Coffee",
+      "name": "Blueberry Muffins",
       "index": 3,
-      "stockout_rate": 0.0927,
-      "mean_velocity": 14.875,
-      "n_rows": 550
+      "stockout_rate": 0.0402,
+      "mean_velocity": 11.137,
+      "n_rows": 7560
+    },
+    "BK-05": {
+      "name": "Chocolate Eclairs",
+      "index": 4,
+      "stockout_rate": 0.0505,
+      "mean_velocity": 7.222,
+      "n_rows": 7560
+    },
+    "BK-06": {
+      "name": "Glazed Donuts",
+      "index": 5,
+      "stockout_rate": 0.0434,
+      "mean_velocity": 18.865,
+      "n_rows": 7560
+    },
+    "BK-07": {
+      "name": "Cheese Danish",
+      "index": 6,
+      "stockout_rate": 0.0455,
+      "mean_velocity": 9.257,
+      "n_rows": 7560
+    },
+    "BK-08": {
+      "name": "Fruit Tart",
+      "index": 7,
+      "stockout_rate": 0.1927,
+      "mean_velocity": 3.388,
+      "n_rows": 7560
+    },
+    "BK-09": {
+      "name": "Coffee Cake",
+      "index": 8,
+      "stockout_rate": 0.0974,
+      "mean_velocity": 5.314,
+      "n_rows": 7560
+    },
+    "BK-10": {
+      "name": "Baguette",
+      "index": 9,
+      "stockout_rate": 0.0438,
+      "mean_velocity": 14.04,
+      "n_rows": 7560
     }
   }
 }

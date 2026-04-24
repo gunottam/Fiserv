@@ -39,6 +39,7 @@ FEATURE_ORDER: tuple[str, ...] = (
     "day_idx",
     "hour",
     "is_peak_hour",
+    "is_weekend",
     "current_stock",
     "threshold",
     "item_idx",
@@ -147,17 +148,18 @@ def prepare_features(
 ) -> dict[str, Any]:
     """Return a normalized feature dict + numpy row for the inference model.
 
-    ``vector`` has shape (1, 6) matching ``FEATURE_ORDER``.
+    ``vector`` has shape (1, 7) matching ``FEATURE_ORDER``.
     """
     day_idx = encode_day(day_of_week)
     safe_hour = clamp_hour(hour)
     stock = max(0.0, safe_float(current_stock))
     thresh = max(1.0, safe_float(threshold, default=1.0))
     peak = bool(is_peak_hour)
+    weekend = day_idx in WEEKEND_DAYS
     item_idx = encode_item(item_id)
 
     vector = np.array(
-        [[day_idx, safe_hour, int(peak), stock, thresh, item_idx]],
+        [[day_idx, safe_hour, int(peak), int(weekend), stock, thresh, item_idx]],
         dtype=float,
     )
 
@@ -165,9 +167,9 @@ def prepare_features(
         "day_idx": day_idx,
         "hour": safe_hour,
         "is_peak_hour": peak,
+        "is_weekend": weekend,
         "current_stock": stock,
         "threshold": thresh,
-        "is_weekend": day_idx in WEEKEND_DAYS,
         "item_id": item_id,
         "item_idx": item_idx,
         "vector": vector,

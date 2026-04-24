@@ -7,7 +7,13 @@ numpy>=1.26.0
 pydantic>=2.9.0
 
 # ML runtime + training
-# (scikit-learn is required at runtime to unpickle the trained model;
-# pandas is used by scripts/train_model.py and is light enough to ship.)
+# scikit-learn is required at runtime to unpickle the trained model. pandas
+# is used by scripts/train_model.py and is light enough to ship. xgboost and
+# lightgbm are compared during training; whichever wins becomes model.pkl,
+# so both need to be runtime-installable for unpickling.
+#
+# NOTE macOS users: xgboost/lightgbm require `brew install libomp`.
 scikit-learn>=1.5.0
 pandas>=2.2.0
+xgboost>=2.0.0
+lightgbm>=4.0.0

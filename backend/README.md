@@ -27,7 +27,7 @@ backend/
 ├── utils/
 │   └── preprocessing.py        # day-of-week + item_id encoding, feature prep
 ├── scripts/
-│   └── train_model.py          # trains on dataset/dataset.csv, emits artifacts
+│   └── train_model.py          # multi-algo benchmark → saves winner to models/
 ├── requirements.txt
 ├── .env.example
 └── README.md
@@ -35,9 +35,33 @@ backend/
 
 Artifacts written into the repo-root `models/` folder by the training script:
 
-* `model.pkl`         — joblib-pickled sklearn `GradientBoostingRegressor`.
-* `item_stats.json`   — per-item integer encoding, historical stockout rate,
-                        mean velocity, training metrics, and feature order.
+* `model.pkl`               — joblib-pickled winning sklearn/xgboost/lightgbm regressor.
+* `item_stats.json`         — per-item integer encoding, historical stockout rate,
+                              mean velocity, winner metrics, and feature order.
+* `comparison_report.json`  — full side-by-side ranking for every candidate
+                              algorithm evaluated on the chronological hold-out.
+
+## Model benchmark
+
+`scripts/train_model.py` trains five candidates on the historical CSV, scores
+each on a chronological hold-out (no shuffle — trailing 20% is held out), and
+saves the best-MAE winner as `models/model.pkl`. Honest feature set only: no
+`is_stock_out` leakage, no rolling lag features the live request wouldn't have.
+
+Latest run on `dataset/bakery_inventory.csv` (75,600 rows, 10 SKUs, 18 mo):
+
+| rank | candidate         | test MAE | test RMSE | test R² | fit  | pred |
+|-----:|-------------------|---------:|----------:|--------:|-----:|-----:|
+|    1 | gradient_boost    |    1.250 |     1.640 |  0.9487 |  7.4s| 0.04s|
+|    2 | xgboost           |    1.256 |     1.646 |  0.9483 |  0.7s| 0.01s|
+|    3 | lightgbm          |    1.258 |     1.649 |  0.9481 |  4.9s| 0.04s|
+|    4 | random_forest     |    1.282 |     1.689 |  0.9456 |  0.8s| 0.05s|
+|    5 | ridge             |    2.105 |     2.663 |  0.8647 |  0.0s| 0.00s|
+
+Naive-mean MAE baseline is 5.68 units/hr, so the winner is **78% below** the
+no-skill baseline. GBDTs cluster within 0.03 u/hr — for production the XGBoost
+model is arguably preferable (10× faster fit, ~identical accuracy); re-run with
+`python -m scripts.train_model --only xgboost` to force it.
 
 ## Quick start
 
@@ -46,9 +70,16 @@ cd backend
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+# macOS only: xgboost + lightgbm need `brew install libomp`.
 
-# Train the model on dataset/dataset.csv → models/model.pkl + models/item_stats.json
+# Benchmark all five algorithms on dataset/bakery_inventory.csv and
+# save the winner → models/model.pkl + models/item_stats.json + comparison_report.json
 python -m scripts.train_model
+
+# Restrict to a subset:
+#   python -m scripts.train_model --only xgboost,lightgbm
+# Use a different CSV:
+#   python -m scripts.train_model --dataset ../dataset/dataset.csv
 
 cp .env.example .env
 # edit .env, paste your GROQ_API_KEY (optional — backend still works without it)

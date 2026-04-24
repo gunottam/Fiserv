@@ -1,0 +1,59 @@
+{
+  "trained_at": "2026-04-24T08:45:56+00:00",
+  "dataset": "../dataset/bakery_inventory.csv",
+  "n_train": 60480,
+  "n_test": 15120,
+  "baseline_mean_mae": 5.68,
+  "feature_order": [
+    "day_idx",
+    "hour",
+    "is_peak_hour",
+    "is_weekend",
+    "current_stock",
+    "threshold",
+    "item_idx"
+  ],
+  "candidates": [
+    {
+      "name": "gradient_boost",
+      "mae": 1.2498,
+      "rmse": 1.6395,
+      "r2": 0.9487,
+      "fit_seconds": 7.38,
+      "predict_seconds": 0.04
+    },
+    {
+      "name": "xgboost",
+      "mae": 1.2564,
+      "rmse": 1.6464,
+      "r2": 0.9483,
+      "fit_seconds": 0.71,
+      "predict_seconds": 0.01
+    },
+    {
+      "name": "lightgbm",
+      "mae": 1.2582,
+      "rmse": 1.649,
+      "r2": 0.9481,
+      "fit_seconds": 4.89,
+      "predict_seconds": 0.044
+    },
+    {
+      "name": "random_forest",
+      "mae": 1.2823,
+      "rmse": 1.6886,
+      "r2": 0.9456,
+      "fit_seconds": 0.82,
+      "predict_seconds": 0.051
+    },
+    {
+      "name": "ridge",
+      "mae": 2.105,
+      "rmse": 2.663,
+      "r2": 0.8647,
+      "fit_seconds": 0.01,
+      "predict_seconds": 0.0
+    }
+  ],
+  "winner": "gradient_boost"
+}

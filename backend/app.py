@@ -14,7 +14,9 @@ from fastapi.middleware.cors import CORSMiddleware
 load_dotenv()
 
 from routes.chat import router as chat_router  # noqa: E402
+from routes.demand import router as demand_router  # noqa: E402
 from routes.predict import router as predict_router  # noqa: E402
+from services.demand_series import dataset_is_available  # noqa: E402
 from services.inference import model_is_loaded  # noqa: E402
 from utils.preprocessing import item_stats_loaded  # noqa: E402
 
@@ -51,6 +53,7 @@ app.add_middleware(
 
 app.include_router(predict_router, tags=["predict"])
 app.include_router(chat_router, tags=["chat"])
+app.include_router(demand_router, tags=["demand"])
 
 
 @app.get("/", tags=["meta"])
@@ -61,6 +64,7 @@ def health() -> dict[str, object]:
         "status": "ok",
         "model_loaded": model_is_loaded(),
         "item_stats_loaded": item_stats_loaded(),
+        "dataset_available": dataset_is_available(),
         "groq_configured": bool(os.getenv("GROQ_API_KEY", "").strip()),
     }
 
