@@ -1,0 +1,48 @@
+{
+  "trained_at": "2026-04-24T08:14:26+00:00",
+  "dataset": "../dataset/dataset.csv",
+  "n_rows": 2200,
+  "feature_order": [
+    "day_idx",
+    "hour",
+    "is_peak_hour",
+    "current_stock",
+    "threshold",
+    "item_idx"
+  ],
+  "metrics": {
+    "test_mae": 1.503,
+    "test_r2": 0.9048,
+    "baseline_mean_mae": 5.036
+  },
+  "items": {
+    "BK-01": {
+      "name": "Croissants",
+      "index": 0,
+      "stockout_rate": 0.1236,
+      "mean_velocity": 6.887,
+      "n_rows": 550
+    },
+    "BK-02": {
+      "name": "Bread",
+      "index": 1,
+      "stockout_rate": 0.1309,
+      "mean_velocity": 8.158,
+      "n_rows": 550
+    },
+    "BK-03": {
+      "name": "Muffins",
+      "index": 2,
+      "stockout_rate": 0.2,
+      "mean_velocity": 8.473,
+      "n_rows": 550
+    },
+    "BK-04": {
+      "name": "Coffee",
+      "index": 3,
+      "stockout_rate": 0.0927,
+      "mean_velocity": 14.875,
+      "n_rows": 550
+    }
+  }
+}
