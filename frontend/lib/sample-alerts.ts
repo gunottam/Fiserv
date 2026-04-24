@@ -70,7 +70,7 @@ export const SAMPLE_ALERTS: InventoryAlert[] = [
     event_timestamp: "2026-04-20T07:30:00",
     item_id: "BK-09",
     item_name: "Coffee Cake",
-    current_stock: 6,
+    current_stock: 18,
     static_threshold: 8,
     metadata: {
       store_id: "IND-01",

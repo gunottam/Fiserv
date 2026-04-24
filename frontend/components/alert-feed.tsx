@@ -5,11 +5,27 @@ import {
   BellIcon,
   CircleCheckIcon,
   RadioIcon,
+  SearchIcon,
+  SearchXIcon,
   TriangleAlertIcon,
+  XIcon,
 } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty"
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from "@/components/ui/input-group"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Skeleton } from "@/components/ui/skeleton"
 import { URGENCY_RANK, coverageLabel } from "@/lib/decisions"
@@ -53,6 +69,9 @@ export function AlertFeed({
   loading: boolean
   className?: string
 }) {
+  const [query, setQuery] = React.useState("")
+  const trimmedQuery = query.trim().toLowerCase()
+
   const sorted = React.useMemo(() => {
     return [...alerts].sort((a, b) => {
       const da = decisions[a.alert_id]
@@ -67,10 +86,21 @@ export function AlertFeed({
     })
   }, [alerts, decisions])
 
+  // Filter is applied AFTER sort so matches keep the urgency ordering.
+  const visible = React.useMemo(() => {
+    if (!trimmedQuery) return sorted
+    return sorted.filter((a) => {
+      const haystack = `${a.item_name} ${a.item_id}`.toLowerCase()
+      return haystack.includes(trimmedQuery)
+    })
+  }, [sorted, trimmedQuery])
+
   const resolvedCount = Object.keys(decisions).length
-  const subtitle = loading
-    ? `${resolvedCount}/${alerts.length} evaluated`
-    : `${alerts.length} active`
+  const subtitle = trimmedQuery
+    ? `${visible.length} match${visible.length === 1 ? "" : "es"}`
+    : loading
+      ? `${resolvedCount}/${alerts.length} evaluated`
+      : `${alerts.length} active`
 
   return (
     <Card className={cn("flex h-full flex-col", className)}>
@@ -86,28 +116,69 @@ export function AlertFeed({
           {subtitle}
         </Badge>
       </CardHeader>
-      <CardContent className="flex-1 overflow-hidden p-0">
-        <ScrollArea className="h-full max-h-[520px] px-3 pb-3 lg:max-h-[calc(100svh-12rem)]">
-          <ul className="flex flex-col gap-1.5">
-            {sorted.map((alert) => {
-              const decision = decisions[alert.alert_id]
-              return (
-                <li key={alert.alert_id}>
-                  <AlertFeedRow
-                    alert={alert}
-                    decision={decision}
-                    active={alert.alert_id === activeId}
-                    onSelect={onSelect}
-                  />
-                </li>
-              )
-            })}
-            {loading && resolvedCount < alerts.length && (
-              <li className="flex flex-col gap-1.5 pt-1">
-                <Skeleton className="h-16 rounded-lg" />
-              </li>
+      <CardContent className="flex flex-1 flex-col gap-3 overflow-hidden p-0">
+        <div className="px-3">
+          <InputGroup>
+            <InputGroupInput
+              type="search"
+              role="searchbox"
+              placeholder="Search items…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              aria-label="Search alerts by item name or SKU"
+            />
+            <InputGroupAddon>
+              <SearchIcon />
+            </InputGroupAddon>
+            {query && (
+              <InputGroupAddon align="inline-end">
+                <InputGroupButton
+                  size="icon-xs"
+                  aria-label="Clear search"
+                  onClick={() => setQuery("")}
+                >
+                  <XIcon />
+                </InputGroupButton>
+              </InputGroupAddon>
             )}
-          </ul>
+          </InputGroup>
+        </div>
+
+        <ScrollArea className="h-full max-h-[520px] px-3 pb-3 lg:max-h-[calc(100svh-14rem)]">
+          {visible.length === 0 && !loading ? (
+            <Empty className="py-8">
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <SearchXIcon />
+                </EmptyMedia>
+                <EmptyTitle>No matches</EmptyTitle>
+                <EmptyDescription>
+                  No alerts match &ldquo;{query}&rdquo;.
+                </EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          ) : (
+            <ul className="flex flex-col gap-1.5">
+              {visible.map((alert) => {
+                const decision = decisions[alert.alert_id]
+                return (
+                  <li key={alert.alert_id}>
+                    <AlertFeedRow
+                      alert={alert}
+                      decision={decision}
+                      active={alert.alert_id === activeId}
+                      onSelect={onSelect}
+                    />
+                  </li>
+                )
+              })}
+              {loading && resolvedCount < alerts.length && (
+                <li className="flex flex-col gap-1.5 pt-1">
+                  <Skeleton className="h-16 rounded-lg" />
+                </li>
+              )}
+            </ul>
+          )}
         </ScrollArea>
       </CardContent>
     </Card>

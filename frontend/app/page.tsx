@@ -6,17 +6,15 @@ import {
   AlertCircleIcon,
   ArrowUpRightIcon,
   BoxesIcon,
-  CalendarClockIcon,
   CheckIcon,
+  ChevronDownIcon,
   ClockIcon,
-  HistoryIcon,
   MoonIcon,
   RefreshCwIcon,
   SparklesIcon,
   SunIcon,
   TrendingUpIcon,
   TriangleAlertIcon,
-  ZapIcon,
 } from "lucide-react"
 import { useTheme } from "next-themes"
 import {
@@ -30,7 +28,9 @@ import {
 } from "recharts"
 import { toast } from "sonner"
 
+import { AlertFeed } from "@/components/alert-feed"
 import { ChatDrawer } from "@/components/chat-drawer"
+import { SystemSnapshot, type SnapshotCounts } from "@/components/system-snapshot"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -48,26 +48,24 @@ import {
   type ChartConfig,
 } from "@/components/ui/chart"
 import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible"
+import {
   Progress,
   ProgressIndicator,
   ProgressTrack,
 } from "@/components/ui/progress"
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectLabel,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
+import { alertToPredictRequest, api } from "@/lib/api"
 import {
-  alertToPredictRequest,
-  api,
-} from "@/lib/api"
-import { SAMPLE_ALERTS, alertLabel } from "@/lib/sample-alerts"
+  buildHeadline,
+  buildSignals,
+  type DecisionSignal,
+} from "@/lib/decisions"
+import { SAMPLE_ALERTS } from "@/lib/sample-alerts"
 import type {
   DemandSeriesResponse,
   InventoryAlert,
@@ -76,11 +74,13 @@ import type {
 } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
+type UrgencyVariant = "destructive" | "warning" | "success"
+
 const URGENCY_CONFIG: Record<
   Urgency,
   {
     label: string
-    badgeVariant: "destructive" | "warning" | "success"
+    badgeVariant: UrgencyVariant
     ringClass: string
     tintClass: string
     accentText: string
@@ -117,52 +117,48 @@ const CHART_CONFIG = {
   demand: { label: "Demand", color: "var(--destructive)" },
 } satisfies ChartConfig
 
-// Map a context-factor string from the backend to a presentable card.
-const FACTOR_META: Record<
-  string,
-  { icon: React.ComponentType<{ className?: string }>; detail: string }
-> = {
-  "Peak hour": {
-    icon: ZapIcon,
-    detail: "+20% velocity boost applied",
-  },
-  Weekend: {
-    icon: CalendarClockIcon,
-    detail: "+20% velocity boost applied",
-  },
-  "Historical stockouts": {
-    icon: HistoryIcon,
-    detail: "+20% boost — elevated stockout rate for this SKU",
-  },
-}
+// ---------------------------------------------------------------------------
+// Page
+// ---------------------------------------------------------------------------
 
 export default function DashboardPage() {
-  const [alertId, setAlertId] = React.useState<string>(SAMPLE_ALERTS[0].alert_id)
-  const alert = React.useMemo<InventoryAlert>(
-    () =>
-      SAMPLE_ALERTS.find((a) => a.alert_id === alertId) ?? SAMPLE_ALERTS[0],
-    [alertId]
+  const [decisions, setDecisions] = React.useState<
+    Record<string, PredictResponse>
+  >({})
+  const [seriesMap, setSeriesMap] = React.useState<
+    Record<string, DemandSeriesResponse>
+  >({})
+  const [activeAlertId, setActiveAlertId] = React.useState<string>(
+    SAMPLE_ALERTS[0].alert_id
   )
-
-  const [decision, setDecision] = React.useState<PredictResponse | null>(null)
-  const [series, setSeries] = React.useState<DemandSeriesResponse | null>(null)
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
 
-  const fetchData = React.useCallback(async (current: InventoryAlert) => {
+  const activeAlert =
+    SAMPLE_ALERTS.find((a) => a.alert_id === activeAlertId) ??
+    SAMPLE_ALERTS[0]
+  const activeDecision = decisions[activeAlertId] ?? null
+  const seriesKey = `${activeAlert.item_id}:${activeAlert.metadata.day_of_week}`
+  const activeSeries = seriesMap[seriesKey] ?? null
+
+  // Fan-out: on mount (and on refresh) we predict every alert in parallel so
+  // the sidebar can render urgencies immediately. Demand series is fetched
+  // lazily per-alert and cached by (item_id, day_of_week).
+  const refreshAll = React.useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      const payload = alertToPredictRequest(current)
-      const [pred, dem] = await Promise.all([
-        api.predict(payload),
-        api.demandSeries(current.item_id, current.metadata.day_of_week),
-      ])
-      setDecision(pred)
-      setSeries(dem)
+      const entries = await Promise.all(
+        SAMPLE_ALERTS.map(async (alert) => {
+          const payload = alertToPredictRequest(alert)
+          const pred = await api.predict(payload)
+          return [alert.alert_id, pred] as const
+        })
+      )
+      setDecisions(Object.fromEntries(entries))
+      setSeriesMap({}) // bust the per-item cache so the chart re-pulls fresh numbers
     } catch (err) {
-      setDecision(null)
-      setSeries(null)
+      setDecisions({})
       setError(
         err instanceof Error
           ? err.message
@@ -175,73 +171,115 @@ export default function DashboardPage() {
   }, [])
 
   React.useEffect(() => {
-    void fetchData(alert)
-  }, [alert, fetchData])
+    void refreshAll()
+  }, [refreshAll])
+
+  // Lazy-load the demand profile for whichever alert is currently active.
+  React.useEffect(() => {
+    if (!activeAlert || seriesMap[seriesKey]) return
+    let cancelled = false
+    void api
+      .demandSeries(activeAlert.item_id, activeAlert.metadata.day_of_week)
+      .then((s) => {
+        if (!cancelled) setSeriesMap((m) => ({ ...m, [seriesKey]: s }))
+      })
+      .catch(() => {
+        // demand-series failure shouldn't block the main decision UI — the
+        // chart falls back to an empty state.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [activeAlert, seriesKey, seriesMap])
+
+  const counts = React.useMemo<SnapshotCounts>(() => {
+    const out: SnapshotCounts = { HIGH: 0, MEDIUM: 0, LOW: 0 }
+    for (const d of Object.values(decisions)) out[d.urgency] += 1
+    return out
+  }, [decisions])
 
   function handleApproveRestock() {
-    if (!decision) return
+    if (!activeDecision) return
     toast.success("Restock order placed", {
-      description: `+${decision.restock} units of ${decision.item_name} dispatched to ${alert.metadata.store_id}.`,
+      description: `+${activeDecision.restock} units of ${activeDecision.item_name} dispatched to ${activeAlert.metadata.store_id}.`,
       icon: <CheckIcon />,
     })
   }
 
-  const urgency = decision ? URGENCY_CONFIG[decision.urgency] : URGENCY_CONFIG.LOW
-  const stockPct = decision
-    ? Math.min(100, (decision.current_stock / decision.threshold) * 100)
+  const urgency = activeDecision
+    ? URGENCY_CONFIG[activeDecision.urgency]
+    : URGENCY_CONFIG.LOW
+  const stockPct = activeDecision
+    ? Math.min(
+        100,
+        (activeDecision.current_stock / activeDecision.threshold) * 100
+      )
     : 0
 
   return (
     <div className="min-h-svh bg-background">
       <SiteHeader
-        alert={alert}
-        alertId={alertId}
-        onAlertChange={setAlertId}
-        onRefresh={() => void fetchData(alert)}
+        counts={counts}
+        countsLoading={loading && Object.keys(decisions).length === 0}
+        storeId={activeAlert.metadata.store_id}
+        onRefresh={() => void refreshAll()}
         refreshing={loading}
       />
-      <main className="mx-auto flex max-w-7xl flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
-        {error && (
-          <Alert variant="destructive">
-            <AlertCircleIcon />
-            <AlertTitle>Backend unreachable</AlertTitle>
-            <AlertDescription>
-              {error} · Start the FastAPI server:{" "}
-              <code className="rounded bg-destructive/10 px-1 py-0.5 text-xs">
-                cd backend && uvicorn app:app --reload --port 8000
-              </code>
-            </AlertDescription>
-          </Alert>
-        )}
+      <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+        <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:gap-6">
+          <AlertFeed
+            alerts={SAMPLE_ALERTS}
+            decisions={decisions}
+            activeId={activeAlertId}
+            onSelect={setActiveAlertId}
+            loading={loading}
+            className="w-full shrink-0 lg:sticky lg:top-20 lg:w-[320px]"
+          />
 
-        {loading && !decision ? (
-          <DashboardSkeleton />
-        ) : decision ? (
-          <>
-            <AlertPanel
-              alert={alert}
-              decision={decision}
-              urgency={urgency}
-              stockPct={stockPct}
-              onApprove={handleApproveRestock}
-            />
-            <ContextPanel decision={decision} />
-            <div className="grid gap-6 lg:grid-cols-5">
-              <ReasoningPanel
-                decision={decision}
-                className="lg:col-span-3"
-              />
-              <DemandChartCard
-                decision={decision}
-                series={series}
-                className="lg:col-span-2"
-              />
-            </div>
-          </>
-        ) : null}
+          <div className="flex min-w-0 flex-1 flex-col gap-6">
+            {error && (
+              <Alert variant="destructive">
+                <AlertCircleIcon />
+                <AlertTitle>Backend unreachable</AlertTitle>
+                <AlertDescription>
+                  {error} · Start the FastAPI server:{" "}
+                  <code className="rounded bg-destructive/10 px-1 py-0.5 text-xs">
+                    cd backend && uvicorn app:app --reload --port 8000
+                  </code>
+                </AlertDescription>
+              </Alert>
+            )}
+
+            {loading && !activeDecision ? (
+              <MainSkeleton />
+            ) : activeDecision ? (
+              <>
+                <AlertPanel
+                  alert={activeAlert}
+                  decision={activeDecision}
+                  urgency={urgency}
+                  stockPct={stockPct}
+                  onApprove={handleApproveRestock}
+                />
+                <ContextPanel decision={activeDecision} />
+                <div className="grid gap-6 xl:grid-cols-5">
+                  <ReasoningPanel
+                    decision={activeDecision}
+                    className="xl:col-span-3"
+                  />
+                  <DemandChartCard
+                    decision={activeDecision}
+                    series={activeSeries}
+                    className="xl:col-span-2"
+                  />
+                </div>
+              </>
+            ) : null}
+          </div>
+        </div>
       </main>
 
-      <ChatDrawer decision={decision} disabled={loading} />
+      <ChatDrawer decision={activeDecision} disabled={loading} />
     </div>
   )
 }
@@ -251,23 +289,18 @@ export default function DashboardPage() {
 // ---------------------------------------------------------------------------
 
 function SiteHeader({
-  alert,
-  alertId,
-  onAlertChange,
+  counts,
+  countsLoading,
+  storeId,
   onRefresh,
   refreshing,
 }: {
-  alert: InventoryAlert
-  alertId: string
-  onAlertChange: (id: string) => void
+  counts: SnapshotCounts
+  countsLoading: boolean
+  storeId: string
   onRefresh: () => void
   refreshing: boolean
 }) {
-  const time = new Date(alert.event_timestamp).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-  })
-
   return (
     <header className="sticky top-0 z-20 border-b border-border/60 bg-background/80 backdrop-blur-md">
       <div className="mx-auto flex h-14 max-w-7xl items-center gap-4 px-4 sm:px-6 lg:px-8">
@@ -280,46 +313,29 @@ function SiteHeader({
               Contextual Inventory Intelligence
             </span>
             <span className="text-xs text-muted-foreground">
-              Store {alert.metadata.store_id} · Bakery Counter
+              Store {storeId} · Bakery Counter
             </span>
           </div>
         </div>
 
-        <div className="ml-auto flex items-center gap-2 sm:gap-3">
-          <Select
-            value={alertId}
-            onValueChange={(v) => v && onAlertChange(v)}
-          >
-            <SelectTrigger size="sm" className="w-[240px]">
-              <SelectValue placeholder="Select an alert" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                <SelectLabel>Live alerts</SelectLabel>
-                {SAMPLE_ALERTS.map((a) => (
-                  <SelectItem key={a.alert_id} value={a.alert_id}>
-                    {alertLabel(a)}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
+        <Separator orientation="vertical" className="mx-1 hidden h-6 md:block" />
 
+        <SystemSnapshot counts={counts} loading={countsLoading} />
+
+        <div className="ml-auto flex items-center gap-2 sm:gap-3">
+          <div className="hidden items-center gap-2 text-xs text-muted-foreground md:flex">
+            <span className="inline-flex size-1.5 animate-pulse rounded-full bg-success" />
+            Live
+          </div>
           <Button
             variant="outline"
             size="icon-sm"
             onClick={onRefresh}
             disabled={refreshing}
-            aria-label="Refresh decision"
+            aria-label="Refresh all alerts"
           >
             <RefreshCwIcon className={cn(refreshing && "animate-spin")} />
           </Button>
-
-          <div className="hidden items-center gap-2 text-xs text-muted-foreground md:flex">
-            <span className="inline-flex size-1.5 animate-pulse rounded-full bg-success" />
-            Live · {alert.metadata.day_of_week} · {time}
-          </div>
-
           <ThemeToggle />
         </div>
       </div>
@@ -484,7 +500,7 @@ function AlertPanel({
 }
 
 // ---------------------------------------------------------------------------
-// Context metrics
+// Context metrics (unchanged)
 // ---------------------------------------------------------------------------
 
 function ContextPanel({ decision }: { decision: PredictResponse }) {
@@ -495,7 +511,7 @@ function ContextPanel({ decision }: { decision: PredictResponse }) {
   return (
     <section
       aria-label="Context metrics"
-      className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4"
+      className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4"
     >
       <MetricCard
         icon={TrendingUpIcon}
@@ -610,7 +626,7 @@ function MetricCard({
 }
 
 // ---------------------------------------------------------------------------
-// Reasoning panel — LLM explanation + driving signals
+// Reasoning — two-layer: concrete headline + collapsible full rationale
 // ---------------------------------------------------------------------------
 
 function ReasoningPanel({
@@ -620,6 +636,16 @@ function ReasoningPanel({
   decision: PredictResponse
   className?: string
 }) {
+  const [open, setOpen] = React.useState(false)
+  const headline = buildHeadline(decision)
+  const signals = buildSignals(decision)
+
+  // Reset the drawer when the selected alert changes so the operator's next
+  // look is always the compact headline first.
+  React.useEffect(() => {
+    setOpen(false)
+  }, [decision.item_id, decision.urgency])
+
   return (
     <Card
       className={cn(
@@ -644,66 +670,99 @@ function ReasoningPanel({
           </Badge>
         </div>
       </CardHeader>
+
       <CardContent className="flex flex-col gap-5">
-        <p className="text-[15px] leading-7 text-foreground">
-          {decision.explanation}
+        {/* Layer 1 — concrete, scannable, always visible. */}
+        <p className="text-lg font-semibold leading-snug text-foreground md:text-xl">
+          {headline}
         </p>
 
-        <div>
-          <span className="text-xs font-medium uppercase tracking-[0.12em] text-muted-foreground">
-            Signals driving this
-          </span>
-          <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-            {decision.context_factors.length === 0 ? (
-              <div className="rounded-lg border border-dashed border-border/60 bg-background/40 p-3 text-xs text-muted-foreground">
-                No context boosts fired — baseline velocity only.
-              </div>
-            ) : (
-              decision.context_factors.map((factor) => {
-                const meta = FACTOR_META[factor] ?? {
-                  icon: SparklesIcon,
-                  detail: "Context boost applied",
-                }
-                const Icon = meta.icon
-                return (
-                  <div
-                    key={factor}
-                    className="flex items-start gap-3 rounded-lg border border-border/60 bg-background/40 p-3"
-                  >
-                    <div className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
-                      <Icon className="size-3.5" />
-                    </div>
-                    <div className="flex min-w-0 flex-col">
-                      <span className="truncate text-sm font-medium">
-                        {factor}
-                      </span>
-                      <span className="truncate text-xs text-muted-foreground">
-                        {meta.detail}
-                      </span>
-                    </div>
-                  </div>
-                )
-              })
-            )}
-          </div>
-        </div>
+        <SignalList signals={signals} />
 
-        <div className="flex flex-wrap gap-2 text-[11px] text-muted-foreground">
-          <span className="rounded-md border border-border/60 bg-background/40 px-2 py-1">
-            Historical stockout rate:{" "}
-            <span className="font-medium tabular-nums text-foreground">
-              {(decision.historical_stockout_rate * 100).toFixed(1)}%
-            </span>
-          </span>
-          <span className="rounded-md border border-border/60 bg-background/40 px-2 py-1">
-            Coverage rule:{" "}
-            <span className="font-medium text-foreground">
-              {decision.is_peak_hour ? "5h peak" : "3h off-peak"}
-            </span>
-          </span>
-        </div>
+        {/* Layer 2 — full LLM rationale tucked behind a disclosure button. */}
+        <Collapsible open={open} onOpenChange={setOpen}>
+          <CollapsibleTrigger
+            render={
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full justify-center"
+                aria-expanded={open}
+              >
+                <ChevronDownIcon
+                  data-icon="inline-start"
+                  className={cn(
+                    "transition-transform duration-200",
+                    open && "rotate-180"
+                  )}
+                />
+                {open ? "Hide reasoning" : "View reasoning"}
+              </Button>
+            }
+          />
+          <CollapsibleContent
+            className={cn(
+              // Grid-rows trick for smooth height animation that works with
+              // base-ui's data-open / data-closed states on the panel.
+              "grid transition-[grid-template-rows] duration-200 ease-out",
+              "data-[open]:grid-rows-[1fr] data-[closed]:grid-rows-[0fr]"
+            )}
+          >
+            <div className="overflow-hidden">
+              <div className="mt-4 flex flex-col gap-3 rounded-lg border border-border/60 bg-background/40 p-4">
+                <p className="text-sm leading-6 text-muted-foreground">
+                  {decision.explanation}
+                </p>
+                <div className="flex flex-wrap gap-2 text-[11px] text-muted-foreground">
+                  <span className="rounded-md border border-border/60 bg-background/60 px-2 py-1">
+                    Historical stockout rate:{" "}
+                    <span className="font-medium tabular-nums text-foreground">
+                      {(decision.historical_stockout_rate * 100).toFixed(1)}%
+                    </span>
+                  </span>
+                  <span className="rounded-md border border-border/60 bg-background/60 px-2 py-1">
+                    Coverage rule:{" "}
+                    <span className="font-medium text-foreground">
+                      {decision.is_peak_hour ? "5h peak" : "3h off-peak"}
+                    </span>
+                  </span>
+                </div>
+              </div>
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
       </CardContent>
     </Card>
+  )
+}
+
+function SignalList({ signals }: { signals: DecisionSignal[] }) {
+  if (signals.length === 0) return null
+
+  return (
+    <div className="flex flex-col gap-2">
+      <span className="text-xs font-medium uppercase tracking-[0.12em] text-muted-foreground">
+        Signals driving this
+      </span>
+      <ul className="grid gap-1.5 sm:grid-cols-2">
+        {signals.map((signal) => (
+          <li
+            key={signal.id}
+            className="flex items-center gap-2 rounded-lg border border-border/60 bg-background/40 px-3 py-2 text-sm"
+          >
+            <span className="truncate font-medium text-foreground">
+              {signal.key}
+            </span>
+            <span className="text-muted-foreground" aria-hidden>
+              →
+            </span>
+            <span className="truncate text-muted-foreground">
+              {signal.impact}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
   )
 }
 
@@ -871,21 +930,21 @@ function formatHour(h: number): string {
 }
 
 // ---------------------------------------------------------------------------
-// Skeleton (first-paint)
+// Skeleton (first-paint, main column only — the sidebar has its own)
 // ---------------------------------------------------------------------------
 
-function DashboardSkeleton() {
+function MainSkeleton() {
   return (
     <div className="flex flex-col gap-6">
       <Skeleton className="h-[220px] w-full rounded-xl" />
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {Array.from({ length: 4 }).map((_, i) => (
           <Skeleton key={i} className="h-[140px] w-full rounded-xl" />
         ))}
       </div>
-      <div className="grid gap-6 lg:grid-cols-5">
-        <Skeleton className="h-[320px] w-full rounded-xl lg:col-span-3" />
-        <Skeleton className="h-[320px] w-full rounded-xl lg:col-span-2" />
+      <div className="grid gap-6 xl:grid-cols-5">
+        <Skeleton className="h-[320px] w-full rounded-xl xl:col-span-3" />
+        <Skeleton className="h-[320px] w-full rounded-xl xl:col-span-2" />
       </div>
     </div>
   )
