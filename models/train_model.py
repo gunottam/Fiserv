@@ -1,3 +1,8 @@
+# Legacy XGBoost-only trainer — kept for reference.
+# Production training and benchmarking: run from `backend/`:
+#   python -m scripts.train_model
+# See `backend/scripts/train_model.py` and `backend/README.md`.
+
 import pandas as pd
 import numpy as np
 import joblib

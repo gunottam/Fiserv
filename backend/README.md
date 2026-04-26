@@ -14,12 +14,15 @@ Request ──► preprocess ──► predict velocity ──► context engine
 
 ```
 backend/
-├── app.py                      # FastAPI entrypoint + CORS
+├── app.py                      # FastAPI entrypoint + CORS + lifespan (Telegram bot)
+├── schemas/
+│   └── predict.py              # PredictRequest / PredictResponse (shared)
 ├── routes/
-│   ├── predict.py              # POST /predict, orchestrates the pipeline
+│   ├── predict.py              # POST /predict (thin; delegates to pipeline)
 │   ├── demand.py               # GET /demand-series for the chart baseline
 │   └── chat.py                 # POST /chat, grounded reasoning over a decision
 ├── services/
+│   ├── pipeline.py             # core /predict orchestration (testable entry)
 │   ├── inference.py            # model.pkl loader + dummy fallback predictor
 │   ├── context_engine.py       # applies +20% boosts (peak / weekend / history)
 │   ├── restock.py              # restock qty, urgency, coverage, stockout risk
