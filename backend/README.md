@@ -17,6 +17,7 @@ backend/
 ├── app.py                      # FastAPI entrypoint + CORS
 ├── routes/
 │   ├── predict.py              # POST /predict, orchestrates the pipeline
+│   ├── demand.py               # GET /demand-series for the chart baseline
 │   └── chat.py                 # POST /chat, grounded reasoning over a decision
 ├── services/
 │   ├── inference.py            # model.pkl loader + dummy fallback predictor
@@ -24,7 +25,8 @@ backend/
 │   ├── restock.py              # restock qty, urgency, coverage, stockout risk
 │   ├── explain.py              # one-shot Groq explanation + rule fallback
 │   ├── chat.py                 # multi-turn Groq chat + rule fallback
-│   └── telegram.py             # HIGH/MEDIUM alert notifications (optional)
+│   ├── telegram.py             # HIGH/MEDIUM push alerts (optional, dedup + mute)
+│   └── telegram_bot.py         # long-poll listener: /help, /status, /alerts, …
 ├── utils/
 │   └── preprocessing.py        # day-of-week + item_id encoding, feature prep
 ├── scripts/
@@ -88,9 +90,11 @@ uvicorn app:app --reload --port 8000
 ```
 
 The `/` health endpoint reports `model_loaded`, `item_stats_loaded`,
-`groq_configured`, and `telegram_configured` so you can verify everything
-wired up. A fresh install without training still works — inference.py falls
-back to a per-item heuristic and `historical_stockout_rate` defaults to 0.
+`dataset_available`, `groq_configured`, `telegram_configured`, and
+`telegram_bot_running` (true when the interactive listener is active) so you
+can verify everything wired up. A fresh install without training still works —
+inference.py falls back to a per-item heuristic and
+`historical_stockout_rate` defaults to 0.
 
 ## Telegram notifications (optional)
 
@@ -98,17 +102,41 @@ When `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are set in `.env`, every
 `HIGH` or `MEDIUM` `/predict` response triggers a short Markdown alert to
 Telegram. `LOW` urgency is a silent no-op. The call runs via FastAPI's
 `BackgroundTasks` so it fires *after* the HTTP response — a slow or failing
-bot can never block or error the client. Missing env vars, timeouts, and
-non-2xx responses are logged and swallowed.
+Telegram API can never block or error the client. Missing env vars, timeouts,
+and non-2xx responses are logged and swallowed.
+
+**Dedup:** repeat alerts for the same `(item_id, urgency)` are suppressed for
+`TELEGRAM_DEDUP_SECONDS` (default 300) so dashboard refreshes do not flood the
+chat or hit Telegram rate limits.
+
+**Interactive bot:** on startup, the backend also runs a long-polling
+listener (`services/telegram_bot.py`) in the same process as uvicorn. Open
+your chat with the bot and use the built-in `/` menu, or type:
+
+| Command | What it does |
+|--------|----------------|
+| `/start` | Short intro |
+| `/help` | All commands |
+| `/status` | Counts of HIGH / MEDIUM / LOW from recent `/predict` decisions |
+| `/alerts` | Top active HIGH and MEDIUM lines (from the same in-memory cache) |
+| `/mute [minutes]` | Pause push alerts (default 15 min, max 24 h) |
+| `/unmute` | Resume push alerts |
+| `/ping` | Quick round-trip; replies are local (tens of ms, no LLM) |
+
+Only messages from the configured `TELEGRAM_CHAT_ID` are accepted; other chats
+are ignored. Command replies use Markdown and never call Groq, so they feel
+instant.
 
 Setup:
 
 1. Create a bot with [@BotFather](https://t.me/BotFather) to get the token.
 2. Start a chat with your bot (or add it to a group), then visit
    `https://api.telegram.org/bot<TOKEN>/getUpdates` to find your `chat.id`.
-3. Set both values in `backend/.env`. Leave either blank to disable.
+3. Set both values in `backend/.env`. Leave either blank to disable push
+   alerts; the command listener also stays off if the token is missing.
+4. Restart `uvicorn` after changing `.env` so the bot picks up new values.
 
-Sample message:
+Sample push alert:
 
 ```
 🚨 *HIGH URGENCY ALERT*
